@@ -17,7 +17,7 @@ QDISC=cake
 
 # INGRESS_CAKE_OPTS and EGRESS_CAKE_OPTS are defined in defaults.sh now
 
-
+LSUBNET="192.168.10.0/24"
 
 
 ipt_setup() {
@@ -56,14 +56,22 @@ ipt_setup() {
 
 egress() {
 
+    BL_RATE=`expr $UPLINK / 2`
+
     $TC qdisc del dev $IFACE root 2> /dev/null
-    $TC qdisc add dev $IFACE root $( get_stab_string ) cake bandwidth ${UPLINK}kbit $( get_cake_lla_string ) ${EGRESS_CAKE_OPTS} ${EQDISC_OPTS}
+
+    $TC qdisc add dev $IFACE root handle 1: $( get_stab_string ) cake bandwidth ${UPLINK}kbit $( get_cake_lla_string ) ${EGRESS_CAKE_OPTS} ${EQDISC_OPTS}
+    $TC class add dev $IFACE parent 1: classid 1:1 cake bandwidth ${BL_RATE}kbit $( get_cake_lla_string ) ${EGRESS_CAKE_OPTS} ${EQDISC_OPTS}
+
+    $TC filter add dev $IFACE parent 1: protocol ip prio 16 u32 match ip src ${LSUBNET} flowid 1:1
 
     #diffserv $IFACE
 }
 
 
 ingress() {
+
+    BL_RATE=`expr $DOWNLINK / 2`
 
     $TC qdisc del dev $IFACE handle ffff: ingress 2> /dev/null
     $TC qdisc add dev $IFACE handle ffff: ingress
@@ -75,10 +83,12 @@ ingress() {
 	sqm_debug "Do not perform DSCP based filtering on ingress. (1-tier classification)"
 	# Revert to no dscp based filtering
 	INGRESS_CAKE_OPTS="besteffort"
-	$TC qdisc add dev $DEV root $( get_stab_string ) cake bandwidth ${DOWNLINK}kbit $( get_cake_lla_string ) ${INGRESS_CAKE_OPTS} ${IQDISC_OPTS}
+	$TC qdisc add dev $DEV root handle 1: $( get_stab_string ) cake bandwidth ${DOWNLINK}kbit $( get_cake_lla_string ) ${INGRESS_CAKE_OPTS} ${IQDISC_OPTS}
+	$TC class add dev $DEV parent 1: classid 1:1 cake bandwidth ${BL_RATE}kbit $( get_cake_lla_string ) ${INGRESS_CAKE_OPTS} ${IQDISC_OPTS}
     else
 	sqm_debug "Perform DSCP based filtering on ingress. (multi-tier classification)"
-	$TC qdisc add dev $DEV root $( get_stab_string) cake bandwidth ${DOWNLINK}kbit $( get_cake_lla_string ) $INGRESS_CAKE_OPTS ${IQDISC_OPTS}
+	$TC qdisc add dev $DEV root handle 1: $( get_stab_string ) cake bandwidth ${DOWNLINK}kbit $( get_cake_lla_string ) ${INGRESS_CAKE_OPTS} ${IQDISC_OPTS}
+	$TC class add dev $DEV parent 1: classid 1:1 cake bandwidth ${BL_RATE}kbit $( get_cake_lla_string ) ${INGRESS_CAKE_OPTS} ${IQDISC_OPTS}
     fi
 
     $IP link set dev $DEV up
@@ -87,6 +97,8 @@ ingress() {
 
     $TC filter add dev $IFACE parent ffff: protocol all prio 10 u32 \
 	match u32 0 0 flowid 1:1 action mirred egress redirect dev $DEV
+
+    $TC filter add dev $IFACE parent 1: protocol ip prio 16 u32 match ip dst ${LSUBNET} flowid 1:1
 }
 
 sqm_start() {
